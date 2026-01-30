@@ -60,17 +60,17 @@ variables:
 stages:
   # Build Stage (also handles PR validation)
   - stage: Build
-    displayName: ${{ eq(variables['Build.Reason'], 'PullRequest') && 'PR Validation' || 'Build Application' }}
+    displayName: 'Build & Validate'
     jobs:
       - job: Build
-        displayName: ${{ eq(variables['Build.Reason'], 'PullRequest') && 'Validate Web App' || 'Build Web App' }}
+        displayName: 'Build Web App'
         pool:
           vmImage: 'ubuntu-latest'
         steps:
           # Build Application with automatic versioning and git tagging
           # For PRs: runs tests and linting only (no versioning/tagging)
           # For deployments: runs full build with versioning and tagging
-          - template: templates/build-template.yml@templates
+          - template: templates/python-build.yml@templates
             parameters:
               pythonVersion: $(pythonVersion)
               workingDirectory: $(workingDirectory)
