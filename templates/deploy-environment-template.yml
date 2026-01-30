@@ -55,3 +55,4 @@ stages:
                       appName: '${{ parameters.appName }}'
                       slotName: '${{ parameters.slotName }}'
                       artifactName: '${{ parameters.artifactName }}'
+
