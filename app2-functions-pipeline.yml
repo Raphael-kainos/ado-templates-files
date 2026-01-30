@@ -26,6 +26,8 @@ pr:
     include:
       - main
       - develop
+      - release/*
+      - hotfix/*
   paths:
     include:
       - app2-functions/**
@@ -47,29 +49,34 @@ variables:
   # - function-app-dev: contains appName, resourceGroup, azureSubscription for dev
   # - function-app-test: contains appName, resourceGroup, azureSubscription for test
   # - function-app-prd: contains appName, resourceGroup, azureSubscription for prd
-  - ${{ if eq(variables['Build.SourceBranchName'], 'develop') }}:
+  # Note: Variable groups not needed for PR validation builds
+  - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'develop')) }}:
     - group: function-app-dev
-  - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/release/') }}:
+  - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')) }}:
     - group: function-app-test
-  - ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+  - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'main')) }}:
     - group: function-app-prd
 
 stages:
-  # Build Stage
+  # Build Stage (also handles PR validation)
   - stage: Build
-    displayName: 'Build Application'
+    displayName: ${{ eq(variables['Build.Reason'], 'PullRequest') && 'PR Validation' || 'Build Application' }}
     jobs:
       - job: Build
-        displayName: 'Build Function App'
+        displayName: ${{ eq(variables['Build.Reason'], 'PullRequest') && 'Validate Function App' || 'Build Function App' }}
         pool:
           vmImage: 'ubuntu-latest'
         steps:
           # Build Application with automatic versioning and git tagging
+          # For PRs: runs tests and linting only (no versioning/tagging)
+          # For deployments: runs full build with versioning and tagging
           - template: templates/build-template.yml@templates
             parameters:
               pythonVersion: $(pythonVersion)
               workingDirectory: $(workingDirectory)
               artifactName: $(artifactName)
+              runTests: ${{ eq(variables['Build.Reason'], 'PullRequest') }}
+              runLinting: ${{ eq(variables['Build.Reason'], 'PullRequest') }}
 
   # Deploy to Dev (automatic for develop branch)
   - template: templates/deploy-environment-template.yml@templates
@@ -82,7 +89,7 @@ stages:
       resourceGroup: $(resourceGroup)
       appType: 'functionApp'
       dependsOn: ['Build']
-      condition: eq(variables['Build.SourceBranchName'], 'develop')
+      condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'develop'))
 
   # Deploy to Test (automatic for release/* branches)
   - template: templates/deploy-environment-template.yml@templates
@@ -95,7 +102,7 @@ stages:
       resourceGroup: $(resourceGroup)
       appType: 'functionApp'
       dependsOn: ['Build']
-      condition: startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')
+      condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
 
   # Deploy to Production (automatic for main branch, requires environment approval)
   - template: templates/deploy-environment-template.yml@templates
@@ -108,4 +115,4 @@ stages:
       resourceGroup: $(resourceGroup)
       appType: 'functionApp'
       dependsOn: ['Build']
-      condition: eq(variables['Build.SourceBranchName'], 'main')
+      condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'main'))
