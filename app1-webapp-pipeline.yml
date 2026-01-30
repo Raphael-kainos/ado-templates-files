@@ -1,4 +1,4 @@
-# App Service (Web App Frontend) - CI/CD Pipeline
+# Azure Durable Functions (Backend) - CI/CD Pipeline
 # GitFlow-based deployment with semantic versioning
 
 # Reference templates from shared repository
@@ -18,8 +18,8 @@ trigger:
       - hotfix/*
   paths:
     include:
-      - app1-webapp/**
-      - pipelines/app1-webapp-pipeline.yml
+      - app2-functions/**
+      - pipelines/app2-functions-pipeline.yml
 
 pr:
   branches:
@@ -30,40 +30,36 @@ pr:
       - hotfix/*
   paths:
     include:
-      - app1-webapp/**
+      - app2-functions/**
 
 variables:
-  # Import shared version configuration from repo
-  # Note: version.yml is NOT in trigger paths - version bumps alone don't trigger rebuilds
-  # - template: ../version.yml
-  
   - name: pythonVersion
     value: '3.12'
   - name: workingDirectory
-    value: 'app1-webapp'
+    value: 'app2-functions'
   - name: artifactName
-    value: 'webapp'
+    value: 'function-app'
   
   # Import environment-specific variable groups based on branch
   # Create these variable groups in Azure DevOps Library:
-  # - webapp-dev: contains appName, resourceGroup, azureSubscription for dev
-  # - webapp-test: contains appName, resourceGroup, azureSubscription for test
-  # - webapp-prd: contains appName, resourceGroup, azureSubscription for prd
+  # - function-app-dev: contains appName, resourceGroup, azureSubscription for dev
+  # - function-app-test: contains appName, resourceGroup, azureSubscription for test
+  # - function-app-prd: contains appName, resourceGroup, azureSubscription for prd
   # Note: Variable groups not needed for PR validation builds
   - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'develop')) }}:
-    - group: webapp-dev
+    - group: function-app-dev
   - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')) }}:
-    - group: webapp-test
+    - group: function-app-test
   - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'main')) }}:
-    - group: webapp-prd
+    - group: function-app-prd
 
 stages:
-  # Build Stage (also handles PR validation)
+  # Build Stage (always runs - handles both PR validation and deployment)
   - stage: Build
     displayName: 'Build & Validate'
     jobs:
       - job: Build
-        displayName: 'Build Web App'
+        displayName: 'Build Function App'
         pool:
           vmImage: 'ubuntu-latest'
         steps:
@@ -78,41 +74,44 @@ stages:
               runTests: ${{ eq(variables['Build.Reason'], 'PullRequest') }}
               runLinting: ${{ eq(variables['Build.Reason'], 'PullRequest') }}
 
-  # Deploy to Dev (automatic for develop branch)
-  - template: templates/deploy-environment-template.yml@templates
-    parameters:
-      environmentName: 'dev'
-      azureSubscription: $(azureSubscription)
-      appName: $(appName)
-      slotName: 'staging'
-      artifactName: $(artifactName)
-      resourceGroup: $(resourceGroup)
-      appType: 'webApp'
-      dependsOn: ['Build']
-      condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'develop'))
+  # Deployment stages (only compiled for non-PR builds)
+  # This prevents validation errors for missing service connections during PR builds
+  - ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
+    # Deploy to Dev (automatic for develop branch)
+    - template: templates/deploy-environment-template.yml@templates
+      parameters:
+        environmentName: 'dev'
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        slotName: 'staging'
+        artifactName: $(artifactName)
+        resourceGroup: $(resourceGroup)
+        appType: 'functionApp'
+        dependsOn: ['Build']
+        condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'develop'))
 
-  # Deploy to Test (automatic for release/* branches)
-  - template: templates/deploy-environment-template.yml@templates
-    parameters:
-      environmentName: 'test'
-      azureSubscription: $(azureSubscription)
-      appName: $(appName)
-      slotName: 'staging'
-      artifactName: $(artifactName)
-      resourceGroup: $(resourceGroup)
-      appType: 'webApp'
-      dependsOn: ['Build']
-      condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
+    # Deploy to Test (automatic for release/* branches)
+    - template: templates/deploy-environment-template.yml@templates
+      parameters:
+        environmentName: 'test'
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        slotName: 'staging'
+        artifactName: $(artifactName)
+        resourceGroup: $(resourceGroup)
+        appType: 'functionApp'
+        dependsOn: ['Build']
+        condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
 
-  # Deploy to Production (automatic for main branch, requires environment approval)
-  - template: templates/deploy-environment-template.yml@templates
-    parameters:
-      environmentName: 'prd'
-      azureSubscription: $(azureSubscription)
-      appName: $(appName)
-      slotName: 'staging'
-      artifactName: $(artifactName)
-      resourceGroup: $(resourceGroup)
-      appType: 'webApp'
-      dependsOn: ['Build']
-      condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'main'))
+    # Deploy to Production (automatic for main branch, requires environment approval)
+    - template: templates/deploy-environment-template.yml@templates
+      parameters:
+        environmentName: 'prd'
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        slotName: 'staging'
+        artifactName: $(artifactName)
+        resourceGroup: $(resourceGroup)
+        appType: 'functionApp'
+        dependsOn: ['Build']
+        condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'main'))
