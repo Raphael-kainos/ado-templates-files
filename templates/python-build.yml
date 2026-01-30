@@ -1,4 +1,4 @@
-# Common Build Template
+# Python Build Template
 # Reusable template for building Python applications with semantic versioning and git tagging
 # Supports both PR validation and deployment builds
 
@@ -12,19 +12,21 @@ parameters:
     type: string
   - name: runTests
     type: boolean
-    default: false  # Enable for PR validation
+    default: false
   - name: runLinting
     type: boolean
-    default: false  # Enable for PR validation
+    default: false
 
 steps:
-  # Checkout with credentials for git tagging and full history for tags
-  # Use shallow clone for PRs (faster), full history for deployments (needs tags)
+  # Checkout with credentials for git tagging
   - checkout: self
-    fetchDepth: ${{ eq(variables['Build.Reason'], 'PullRequest') && 1 || 0 }}
+    ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
+      fetchDepth: 1
+    ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
+      fetchDepth: 0
     persistCredentials: true
   
-  # Calculate Semantic Version (skip for PR validation - not needed)
+  # Calculate Semantic Version (skip for PR validation)
   - task: PowerShell@2
     displayName: 'Calculate Semantic Version'
     name: semver
@@ -53,7 +55,7 @@ steps:
       flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
     displayName: 'Run linting'
     workingDirectory: '${{ parameters.workingDirectory }}'
-    condition: eq('${{ parameters.runLinting }}', true)
+    condition: eq(${{ parameters.runLinting }}, true)
 
   # Run tests (optional - enabled for PR validation)
   - script: |
@@ -61,28 +63,38 @@ steps:
       pytest --junitxml=junit/test-results.xml --cov=. --cov-report=xml
     displayName: 'Run tests'
     workingDirectory: '${{ parameters.workingDirectory }}'
-    condition: eq('${{ parameters.runTests }}', true)
+    condition: eq(${{ parameters.runTests }}, true)
 
   # Publish test results (only if tests ran)
   - task: PublishTestResults@2
     displayName: 'Publish test results'
-    condition: eq('${{ parameters.runTests }}', true)
+    condition: eq(${{ parameters.runTests }}, true)
     inputs:
       testResultsFormat: 'JUnit'
       testResultsFiles: '**/test-results.xml'
       failTaskOnFailedTests: true
 
-  # Archive application files
-  # For PRs: use generic name
-  # For deployments: include semantic version
-  - task: ArchiveFiles@2
-    displayName: 'Archive application files'
-    inputs:
-      rootFolderOrFile: '${{ parameters.workingDirectory }}'
-      includeRootFolder: false
-      archiveType: 'zip'
-      archiveFile: ${{ eq(variables['Build.Reason'], 'PullRequest') && format('$(Build.ArtifactStagingDirectory)/{0}.zip', parameters.artifactName) || format('$(Build.ArtifactStagingDirectory)/{0}-$(semver.version).zip', parameters.artifactName) }}
-      replaceExistingArchive: true
+  # Archive application files (PR - generic name)
+  - ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
+    - task: ArchiveFiles@2
+      displayName: 'Archive application files (PR)'
+      inputs:
+        rootFolderOrFile: '${{ parameters.workingDirectory }}'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/${{ parameters.artifactName }}.zip'
+        replaceExistingArchive: true
+  
+  # Archive application files (Deployment - versioned)
+  - ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
+    - task: ArchiveFiles@2
+      displayName: 'Archive application files (Versioned)'
+      inputs:
+        rootFolderOrFile: '${{ parameters.workingDirectory }}'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/${{ parameters.artifactName }}-$(semver.version).zip'
+        replaceExistingArchive: true
 
   # Publish build artifact
   - task: PublishBuildArtifacts@1
@@ -91,7 +103,7 @@ steps:
       pathToPublish: '$(Build.ArtifactStagingDirectory)'
       artifactName: '${{ parameters.artifactName }}'
       
-  # Tag build in Azure DevOps (only for deployment builds, not PRs)
+  # Tag build in Azure DevOps (only for deployment builds)
   - task: PowerShell@2
     displayName: 'Tag Build with Version'
     condition: ne(variables['Build.Reason'], 'PullRequest')
@@ -103,7 +115,7 @@ steps:
         Write-Host "##vso[build.addbuildtag]$version"
         Write-Host "##vso[build.addbuildtag]Build-$version"
   
-  # Push Git Tag to repository (only on merge to protected branches, never on PRs)
+  # Push Git Tag to repository
   - task: PowerShell@2
     displayName: 'Push Git Tag to Repository'
     condition: |
