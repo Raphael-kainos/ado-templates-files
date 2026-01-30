@@ -1,0 +1,73 @@
+# Common Build Template
+# Reusable template for building Python applications with semantic versioning and git tagging
+
+parameters:
+  - name: pythonVersion
+    type: string
+    default: '4.0'
+  - name: workingDirectory
+    type: string
+  - name: artifactName
+    type: string
+
+steps:
+  # Checkout with credentials for git tagging and full history for tags
+  - checkout: self
+    fetchDepth: 0
+    persistCredentials: true
+  
+  # Calculate Semantic Version
+  - task: PowerShell@2
+    displayName: 'Calculate Semantic Version'
+    name: semver
+    inputs:
+      targetType: 'filePath'
+      filePath: '$(Build.SourcesDirectory)/pipelines/scripts/calculate-semver.ps1'
+  - task: UsePythonVersion@0
+    displayName: 'Use Python ${{ parameters.pythonVersion }}'
+    inputs:
+      versionSpec: '${{ parameters.pythonVersion }}'
+      addToPath: true
+
+  - script: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    displayName: 'Install dependencies'
+    workingDirectory: '${{ parameters.workingDirectory }}'
+
+  - task: ArchiveFiles@2
+    displayName: 'Archive application files'
+    inputs:
+      rootFolderOrFile: '${{ parameters.workingDirectory }}'
+      includeRootFolder: false
+      archiveType: 'zip'
+      archiveFile: '$(Build.ArtifactStagingDirectory)/${{ parameters.artifactName }}-$(semver.version).zip'
+      replaceExistingArchive: true
+
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish artifact: ${{ parameters.artifactName }}'
+    inputs:
+      pathToPublish: '$(Build.ArtifactStagingDirectory)/${{ parameters.artifactName }}-$(semver.version).zip'
+      artifactName: '${{ parameters.artifactName }}'
+      
+  # Tag build in Azure DevOps
+  - task: PowerShell@2
+    displayName: 'Tag Build with Version'
+    inputs:
+      targetType: 'inline'
+      script: |
+        $version = "$(semver.version)"
+        Write-Host "##[section]Tagging build with version: $version"
+        Write-Host "##vso[build.addbuildtag]$version"
+        Write-Host "##vso[build.addbuildtag]Build-$version"
+  
+  # Push Git Tag to repository
+  - task: PowerShell@2
+    displayName: 'Push Git Tag to Repository'
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranchName'], 'main'), eq(variables['Build.SourceBranchName'], 'develop'), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'), startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix/')))
+    inputs:
+      targetType: 'filePath'
+      filePath: '$(Build.SourcesDirectory)/pipelines/scripts/push-git-tag.ps1'
+      arguments: '-Version "$(semver.version)"'
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
