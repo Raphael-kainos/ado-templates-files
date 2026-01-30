@@ -116,5 +116,3 @@ stages:
       appType: 'webApp'
       dependsOn: ['Build']
       condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'main'))
-
-
