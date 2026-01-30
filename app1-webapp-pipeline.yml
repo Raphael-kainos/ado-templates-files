@@ -1,0 +1,111 @@
+# App Service (Web App Frontend) - CI/CD Pipeline
+# GitFlow-based deployment with semantic versioning
+
+# Reference templates from shared repository
+resources:
+  repositories:
+    - repository: templates
+      type: git
+      name: azure-devops-templates
+      ref: refs/heads/main
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+      - release/*
+      - hotfix/*
+  paths:
+    include:
+      - app1-webapp/**
+      - pipelines/app1-webapp-pipeline.yml
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - app1-webapp/**
+
+variables:
+  # Import shared version configuration from repo
+  # Note: version.yml is NOT in trigger paths - version bumps alone don't trigger rebuilds
+  # - template: ../version.yml
+  
+  - name: pythonVersion
+    value: '3.12'
+  - name: workingDirectory
+    value: 'app1-webapp'
+  - name: artifactName
+    value: 'webapp'
+  
+  # Import environment-specific variable groups based on branch
+  # Create these variable groups in Azure DevOps Library:
+  # - webapp-dev: contains appName, resourceGroup, azureSubscription for dev
+  # - webapp-test: contains appName, resourceGroup, azureSubscription for test
+  # - webapp-prd: contains appName, resourceGroup, azureSubscription for prd
+  - ${{ if eq(variables['Build.SourceBranchName'], 'develop') }}:
+    - group: webapp-dev
+  - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/release/') }}:
+    - group: webapp-test
+  - ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+    - group: webapp-prd
+
+stages:
+  # Build Stage
+  - stage: Build
+    displayName: 'Build Application'
+    jobs:
+      - job: Build
+        displayName: 'Build Web App'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          # Build Application with automatic versioning and git tagging
+          - template: templates/build-template.yml@templates
+            parameters:
+              pythonVersion: $(pythonVersion)
+              workingDirectory: $(workingDirectory)
+              artifactName: $(artifactName)
+
+  # Deploy to Dev (automatic for develop branch)
+  - template: templates/deploy-environment-template.yml@templates
+    parameters:
+      environmentName: 'dev'
+      azureSubscription: $(azureSubscription)
+      appName: $(appName)
+      slotName: 'staging'
+      artifactName: $(artifactName)
+      resourceGroup: $(resourceGroup)
+      appType: 'webApp'
+      dependsOn: ['Build']
+      condition: eq(variables['Build.SourceBranchName'], 'develop')
+
+  # Deploy to Test (automatic for release/* branches)
+  - template: templates/deploy-environment-template.yml@templates
+    parameters:
+      environmentName: 'test'
+      azureSubscription: $(azureSubscription)
+      appName: $(appName)
+      slotName: 'staging'
+      artifactName: $(artifactName)
+      resourceGroup: $(resourceGroup)
+      appType: 'webApp'
+      dependsOn: ['Build']
+      condition: startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')
+
+  # Deploy to Production (automatic for main branch, requires environment approval)
+  - template: templates/deploy-environment-template.yml@templates
+    parameters:
+      environmentName: 'prd'
+      azureSubscription: $(azureSubscription)
+      appName: $(appName)
+      slotName: 'staging'
+      artifactName: $(artifactName)
+      resourceGroup: $(resourceGroup)
+      appType: 'webApp'
+      dependsOn: ['Build']
+      condition: eq(variables['Build.SourceBranchName'], 'main')
