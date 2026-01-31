@@ -18,12 +18,9 @@ parameters:
     default: false
 
 steps:
-  # Checkout with credentials for git tagging
+  # Checkout with credentials for git tagging (full history for both PRs and deployments)
   - checkout: self
-    ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
-      fetchDepth: 1
-    ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
-      fetchDepth: 0
+    fetchDepth: 0
     persistCredentials: true
   
   # Calculate Semantic Version (skip for PR validation)

@@ -18,6 +18,9 @@ parameters:
   - name: appType
     type: string
     default: 'webApp'  # webApp or functionApp
+  - name: pool
+    type: string
+    default: ''
   - name: dependsOn
     type: object
     default: []
@@ -34,6 +37,7 @@ stages:
       - deployment: Deploy
         displayName: 'Deploy to ${{ parameters.environmentName }}'
         environment: '${{ parameters.environmentName }}'
+        pool: '${{ parameters.pool }}'
         variables:
           resourceGroup: '${{ parameters.resourceGroup }}'
         strategy:
