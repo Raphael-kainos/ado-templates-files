@@ -1,0 +1,127 @@
+# App Service (Web App Frontend) - CI/CD Pipeline
+# GitHub Flow + Release Branches deployment with semantic versioning
+
+# Reference templates from shared repository
+resources:
+  repositories:
+    - repository: templates
+      type: git
+      name: azure-devops-templates-test
+      endpoint: template-connect
+      ref: refs/heads/main
+
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+      - hotfix/*
+  paths:
+    include:
+      - app1-streamlit/**
+      - pipelines/app1-webapp-pipeline.yml
+
+pr:
+  branches:
+    include:
+      - main
+      - release/*
+      - hotfix/*
+  paths:
+    include:
+      - app1-streamlit/**
+
+variables:
+  - name: pythonVersion
+    value: '3.12'
+  - name: workingDirectory
+    value: 'app1-streamlit'
+  - name: artifactName
+    value: 'webapp'
+  
+  # Import environment-specific variable groups based on branch
+  # Create these variable groups in Azure DevOps Library:
+  # - webapp-dev: contains azureSubscription, appName, resourceGroup for dev
+  # - webapp-test: contains azureSubscription, appName, resourceGroup for test (stage environment)
+  # - webapp-prd: contains azureSubscription, appName, resourceGroup for prd (not active yet)
+  
+  # Load test & prd variable groups for release/hotfix branches
+  - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), or(startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'), startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix/'))) }}:
+    - group: webapp-test
+    - group: webapp-prd
+  
+  # Load dev variable group for main branch
+  - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranchName'], 'main')) }}:
+    - group: webapp-dev
+
+stages:
+  # BUILD STAGE - Build Once
+  - stage: Build
+    displayName: 'Build & Validate'
+    jobs:
+      - job: Build
+        displayName: 'Build Web App'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          # Build Application with automatic versioning and git tagging
+          # For PRs: runs tests and linting only (no versioning/tagging)
+          # For deployments: runs full build with versioning, security scanning, and tagging
+          - template: build-templates/build-and-validate-template.yml@templates
+            parameters:
+              pythonVersion: $(pythonVersion)
+              workingDirectory: $(workingDirectory)
+              artifactName: $(artifactName)
+              runTests: true
+              runLinting: true
+              # runSecurityScan: ${{ ne(variables['Build.Reason'], 'PullRequest') }}
+
+  # DEPLOYMENT STAGES - Deploy Same Artifact
+  - ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
+    
+    # Deploy to Test/Stage (release/* and hotfix/* branches only)
+    - template: deploy-templates/deploy-environment-template.yml@templates
+      parameters:
+        environmentName: 'test'
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        slotName: 'staging'
+        artifactName: $(artifactName)
+        resourceGroup: $(resourceGroup)
+        appType: 'webApp'
+        dependsOn: ['Build']
+        condition: |
+          or(
+            startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'),
+            startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix/')
+          )
+
+    # Deploy to Production (release/* and hotfix/* branches, after test)
+    - template: deploy-templates/deploy-environment-template.yml@templates
+      parameters:
+        environmentName: 'prd'
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        slotName: 'staging'
+        artifactName: $(artifactName)
+        resourceGroup: $(resourceGroup)
+        appType: 'webApp'
+        dependsOn: ['Deploy_test']
+        condition: |
+          or(
+            startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'),
+            startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix/')
+          )
+
+    # Deploy to Dev (main branch merges only)
+    - template: deploy-templates/deploy-environment-template.yml@templates
+      parameters:
+        environmentName: 'dev'
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        slotName: 'staging'
+        artifactName: $(artifactName)
+        resourceGroup: $(resourceGroup)
+        appType: 'webApp'
+        dependsOn: ['Build']
+        condition: eq(variables['Build.SourceBranchName'], 'main')
