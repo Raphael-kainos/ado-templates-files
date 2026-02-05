@@ -1,0 +1,77 @@
+# Environment Deployment Stage Template
+# Handles deployment to a specific environment (dev, stage, prod)
+# Routes to appropriate app-specific template (webapp or functionapp)
+
+parameters:
+  - name: environmentName
+    type: string
+  - name: azureSubscription
+    type: string
+  - name: appName
+    type: string
+  - name: slotName
+    type: string
+    default: 'staging'
+  - name: artifactName
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: appType
+    type: string
+    default: 'webApp'  # webApp or functionApp
+  - name: vmImage
+    type: string  
+    default: 'ubuntu-latest'
+  - name: runtimeStack
+    type: string
+    default: 'PYTHON|3.12'
+  - name: startUpCommand
+    type: string
+    default: 'streamlit run app.py --server.port 8000 --server.address 0.0.0.0'
+  - name: dependsOn
+    type: object
+    default: []
+  - name: condition
+    type: string
+    default: 'succeeded()'
+
+stages:
+  - stage: Deploy_${{ parameters.environmentName }}
+    displayName: 'Deploy to ${{ upper(parameters.environmentName) }}'
+    dependsOn: ${{ parameters.dependsOn }}
+    condition: and(succeeded(), ${{ parameters.condition }})
+    jobs:
+      - deployment: Deploy
+        displayName: 'Deploy to ${{ parameters.environmentName }}'
+        environment: '${{ parameters.environmentName }}'
+        pool:
+          vmImage: '${{ parameters.vmImage }}'
+        # Uncomment to use private agent pool instead of vmImage:
+        # pool:
+        #   name: 'YourPrivateAgentPoolName'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Route to Web App deployment template
+                - ${{ if eq(parameters.appType, 'webApp') }}:
+                  - template: deploy-webapp-template.yml
+                    parameters:
+                      azureSubscription: '${{ parameters.azureSubscription }}'
+                      appName: '${{ parameters.appName }}'
+                      slotName: '${{ parameters.slotName }}'
+                      artifactName: '${{ parameters.artifactName }}'
+                      resourceGroup: '${{ parameters.resourceGroup }}'
+                      runtimeStack: '${{ parameters.runtimeStack }}'
+                      startUpCommand: '${{ parameters.startUpCommand }}'
+                
+                # Route to Function App deployment template
+                - ${{ if eq(parameters.appType, 'functionApp') }}:
+                  - template: deploy-functionapp-template.yml
+                    parameters:
+                      azureSubscription: '${{ parameters.azureSubscription }}'
+                      appName: '${{ parameters.appName }}'
+                      slotName: '${{ parameters.slotName }}'
+                      artifactName: '${{ parameters.artifactName }}'
+                      resourceGroup: '${{ parameters.resourceGroup }}'
+                      runtimeStack: '${{ parameters.runtimeStack }}'

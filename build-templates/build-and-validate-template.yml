@@ -1,0 +1,135 @@
+# Python Build Template
+# Reusable template for building Python applications with semantic versioning and git tagging
+# Supports both PR validation and deployment builds
+
+parameters:
+  - name: pythonVersion
+    type: string
+    default: '3.12'
+  - name: workingDirectory
+    type: string
+  - name: artifactName
+    type: string
+  - name: runTests
+    type: boolean
+    default: true
+  - name: runLinting
+    type: boolean
+    default: true
+
+steps:
+  # Checkout with credentials for git tagging (full history for both PRs and deployments)
+  - checkout: self
+    fetchDepth: 0
+    persistCredentials: true
+  
+  # Calculate Semantic Version (skip for PR validation)
+  - task: PowerShell@2
+    displayName: 'Calculate Semantic Version'
+    name: semver
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+    inputs:
+      targetType: 'filePath'
+      filePath: '$(Build.SourcesDirectory)/scripts/calculate-semver.ps1'
+
+  # Use Python version
+  - task: UsePythonVersion@0
+    displayName: 'Use Python ${{ parameters.pythonVersion }}'
+    inputs:
+      versionSpec: '${{ parameters.pythonVersion }}'
+      addToPath: true
+
+  # Install dependencies
+  - script: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    displayName: 'Install dependencies'
+    workingDirectory: '${{ parameters.workingDirectory }}'
+
+  # Run linting (optional - enabled for PR validation)
+  - script: |
+      pip install pylint flake8
+      flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+    displayName: 'Run linting'
+    workingDirectory: '${{ parameters.workingDirectory }}'
+    condition: eq(${{ parameters.runLinting }}, true)
+
+  # Run tests (optional - enabled for PR validation)
+  - script: |
+      pip install pytest pytest-cov
+      pytest --junitxml=junit/test-results.xml --cov=. --cov-report=xml --cov-report=term-missing
+    displayName: 'Run tests'
+    workingDirectory: '${{ parameters.workingDirectory }}'
+    condition: eq(${{ parameters.runTests }}, true)
+    continueOnError: false
+
+  # Publish test results (only if tests ran)
+  - task: PublishTestResults@2
+    displayName: 'Publish test results'
+    condition: eq(${{ parameters.runTests }}, true)
+    inputs:
+      testResultsFormat: 'JUnit'
+      testResultsFiles: '**/test-results.xml'
+      failTaskOnFailedTests: true
+
+  # Archive application files (PR - generic name)
+  - ${{ if eq(variables['Build.Reason'], 'PullRequest') }}:
+    - task: ArchiveFiles@2
+      displayName: 'Archive application files (PR)'
+      inputs:
+        rootFolderOrFile: '${{ parameters.workingDirectory }}'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/${{ parameters.artifactName }}.zip'
+        replaceExistingArchive: true
+  
+  # Archive application files (Deployment - versioned)
+  - ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
+    - task: ArchiveFiles@2
+      displayName: 'Archive application files (Versioned)'
+      inputs:
+        rootFolderOrFile: '${{ parameters.workingDirectory }}'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/${{ parameters.artifactName }}-$(semver.version).zip'
+        replaceExistingArchive: true
+
+  # Publish build artifact
+  - task: PublishBuildArtifacts@1
+    displayName: 'Publish artifact: ${{ parameters.artifactName }}'
+    inputs:
+      pathToPublish: '$(Build.ArtifactStagingDirectory)'
+      artifactName: '${{ parameters.artifactName }}'
+      
+  # Tag build in Azure DevOps (only for deployment builds)
+  - task: PowerShell@2
+    displayName: 'Tag Build with Version'
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+    inputs:
+      targetType: 'inline'
+      script: |
+        $version = "$(semver.version)"
+        Write-Host "##[section]Tagging build with version: $version"
+        Write-Host "##vso[build.addbuildtag]$version"
+        Write-Host "##vso[build.addbuildtag]Build-$version"
+  
+  # Push Git Tag to repository (on release/hotfix branches)
+  - task: PowerShell@2
+    displayName: 'Push Git Tag to Repository'
+    condition: |
+      and(
+        succeeded(),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        or(
+          startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'),
+          startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix/')
+        )
+      )
+    inputs:
+      targetType: 'filePath'
+      filePath: '$(Build.SourcesDirectory)/scripts/push-git-tag.ps1'
+      arguments: '-Version "$(semver.version)"'
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+
